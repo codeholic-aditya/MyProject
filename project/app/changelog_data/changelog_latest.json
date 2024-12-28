@@ -1,0 +1,45 @@
+{
+    "versions": [
+        {
+            "version": "1.1.4",
+            "is_enable": true,
+            "date": "March 19, 2024",
+            "categories": [
+                {
+                    "category": "Locational",
+                    "features": [
+                        {
+                            "type": "New",
+                            "like": 29,
+                            "dislike": 16,
+                            "description": "Double click on legend"
+                        },
+                        {
+                            "type": "Data",
+                            "like": 12,
+                            "dislike": 0,
+                            "description": "Data adjustment due to new reports of UBA and AGEP"
+                        },
+                        {
+                            "type": "Fix",
+                            "like": 228,
+                            "dislike": 8,
+                            "description": "Dark mode"
+                        }
+                    ]
+                },
+                {
+                    "category": "Live",
+                    "features": [
+                        {
+                            "type": "Tweak",
+                            "like": 16,
+                            "dislike": 6,
+                            "description": "Data adjustment due to new reports of UBA and AGEP"
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
