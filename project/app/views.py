@@ -1,3 +1,4 @@
+import re
 from django.http import JsonResponse
 from rest_framework import status
 from rest_framework.response import Response
@@ -51,6 +52,39 @@ class Generator:
         
         return hashed_value
 
+class Validation:
+    def validate_username(username):
+        # Regex pattern to check for allowed characters (_,-,.)
+        username_pattern = r'^[A-Za-z0-9._-]+$'
+        if not re.match(username_pattern, username):
+            return False
+        return True
+
+    def validate_email(email):
+        # Regex pattern to check for a valid email format
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, email):
+            return False
+        return True
+    def validate_phone_number(self, phone_number):
+        # Regex pattern to check for a valid phone number format
+        phone_number_pattern = r'^\+?[0-9]{1,4}?[-.\s]?[0-9]{1,15}$'
+        if not re.match(phone_number_pattern, phone_number):
+            return False
+        return True
+    
+    def validate_strong_password(password):
+        # Check if the password is at least 8 characters long
+        if len(password) < 8:
+            raise ValidationError("Password must be at least 8 characters long.")
+        if not re.search(r'[A-Z]', password):
+            raise ValidationError("Password must contain at least one uppercase letter.")
+        if not re.search(r'[0-9]', password):
+            raise ValidationError("Password must contain at least one digit.")
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+            raise ValidationError("Password must contain at least one special character.")
+        return password
+
 class BackEndRegister(APIView):
     permission_classes = [IsAdminUser]
 
@@ -67,11 +101,7 @@ class BackEndRegister(APIView):
         password= request.data.get('password')
         is_staff= request.data.get('is_staff',False)
         permission= request.data.get('permission',[])
-
         
-
-        # if not all([username, firstname, lastname, email, password]):
-        #     return Response({"error": "All fields are required."}, status=status.HTTP_400_BAD_REQUEST)
         if not username:
             return Response({"error": "Username is required."}, status=status.HTTP_400_BAD_REQUEST)
         if not firstname:
@@ -83,6 +113,19 @@ class BackEndRegister(APIView):
         if not password:
             return Response({"error": "Password is required."}, status=status.HTTP_400_BAD_REQUEST)
 
+        username_pattern = Validation.validate_username(username)
+        if not username_pattern:
+            return Response({"error": "Username can only contain letters, numbers, underscores (_), hyphens (-), and periods (.)"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # phone_number_pattern = r'^\+?[0-9]{1,4}?[-.\s]?[0-9]{1,15}$'
+        # if not re.match(phone_number_pattern, username):
+        #     return Response({"error": "Invalid phone number format."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        email_pattern = Validation.validate_email(email)
+        if not email_pattern:
+            return Response({"error": "Invalid email format. Please provide a valid email address."}, status=status.HTTP_400_BAD_REQUEST)
+
+        password = Validation.validate_strong_password(password)
 
         if User.objects.filter(username=username).exists():
             return Response({"error": f"Username '{username}' is already exist."}, status=status.HTTP_400_BAD_REQUEST)
@@ -90,36 +133,43 @@ class BackEndRegister(APIView):
         if User.objects.filter(email=email).exists():
             return Response({"error": f"Email '{email}' is already exist."}, status=status.HTTP_400_BAD_REQUEST)
 
-        perms=[]
+        permission_objects=[]
 
         try:
             
             if permission:
                 if not adminuser.has_perm('auth.add_permission'):
                     return Response({"error": "You do not have permission to assign permission to any user."}, status=status.HTTP_403_FORBIDDEN)
+                
+                for perm_codename in permission:
+                    try:
+                        perm = Permission.objects.get(codename=perm_codename)
+                        permission_objects.append(perm)
+                    except Permission.DoesNotExist:
+                        return Response({"error": f"Permission '{perm_codename}' does not exist."}, status=status.HTTP_400_BAD_REQUEST)
 
-                try:
-                    perms = [Permission.objects.get(codename=perm) for perm in permission]
-
-                except Permission.DoesNotExist as e:
-                    return Response({"error": f"Permission that you give does not exist."}, status=status.HTTP_400_BAD_REQUEST)
+                # try:
+                #     perms = [Permission.objects.get(codename=perm) for perm in permission]
+                # except Permission.DoesNotExist:
+                #     return Response({"error": "One or more permissions do not exist."}, status=status.HTTP_400_BAD_REQUEST)
             
             user = User.objects.create_user(
                 username=username,
                 first_name=firstname,
                 last_name=lastname,
-                email=email, 
+                email=email,
                 password=password,
                 is_staff=is_staff,
                 client_id=Generator.generate_hashed_string(username,email)
             )
 
             if is_staff:
-                view_permission = Permission.objects.get(codename="view_user")
-                user.user_permissions.add(view_permission)
+                user_view_permission = Permission.objects.get(codename="view_user")
+                user.user_permissions.add(user_view_permission)
 
             if permission and is_staff:
-                user.user_permissions.set(perms)
+                user.user_permissions.set(permission_objects)
+                print(permission_objects)
 
             user.save()
             return Response({
