@@ -155,14 +155,19 @@ class Login(APIView):
         try:
             user = User.objects.get(username=username)
         except User.DoesNotExist:
-            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({
+                "status": False,
+                "error": "The username you entered does not match any account."
+            }, status=status.HTTP_404_NOT_FOUND)
+   
         
         if user.is_active is False:
             return Response({"error": "User is deactivated"}, status=status.HTTP_400_BAD_REQUEST)
         
         if not user.check_password(password):
             return Response({
-                'message': 'Wrong password'
+            "status": False,
+            "error": "The password you entered is incorrect."
             }, status=status.HTTP_401_UNAUTHORIZED)
 
         # If user is authenticated, generate JWT token
@@ -170,6 +175,7 @@ class Login(APIView):
         access_token = str(refresh.access_token)
         
         return Response({
+            "status": True,
             'message': 'Login successful',
             "user": {
                 "id": user.id,
@@ -178,9 +184,8 @@ class Login(APIView):
                 "lastname": user.last_name,
                 "email": user.email,
                 "is_active": user.is_active,
-                "is_staff": user.is_staff,
+                "is_staff": user.is_staff, 
             },
-                "status": True,
                 'access_token': access_token,
                 'refresh_token': str(refresh)
                 
