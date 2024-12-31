@@ -3,7 +3,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from .serializers import UserSerializer
-from rest_framework_simplejwt.tokens import RefreshToken,AccessToken
+from rest_framework_simplejwt.tokens import RefreshToken,AccessToken,TokenError
 from django.contrib.auth import authenticate,get_user_model,logout
 from django.contrib.auth.models import Permission
 from rest_framework.permissions import IsAuthenticated,IsAdminUser
@@ -53,9 +53,9 @@ class Generator:
 
 class BackEndRegister(APIView):
     permission_classes = [IsAdminUser]
+
     def post(self, request):
-        adminuser=request.user
-        # print("Hello")
+        adminuser = request.user
 
         if not adminuser.has_perm('app.add_user'):
             return Response({"error": "You do not have permission to create a user."}, status=status.HTTP_403_FORBIDDEN)
@@ -65,19 +65,31 @@ class BackEndRegister(APIView):
         lastname= request.data.get('lastname')
         email= request.data.get('email')
         password= request.data.get('password')
+        is_staff= request.data.get('is_staff',False)
         permission= request.data.get('permission',[])
 
         
 
-        if not all([username, firstname, lastname, email, password]):
-            return Response({"error": "All fields are required."}, status=status.HTTP_400_BAD_REQUEST)
-        
+        # if not all([username, firstname, lastname, email, password]):
+        #     return Response({"error": "All fields are required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not username:
+            return Response({"error": "Username is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not firstname:
+            return Response({"error": "First name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not lastname:
+            return Response({"error": "Last name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not email:
+            return Response({"error": "Email is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not password:
+            return Response({"error": "Password is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+
         if User.objects.filter(username=username).exists():
             return Response({"error": f"Username '{username}' is already exist."}, status=status.HTTP_400_BAD_REQUEST)
 
         if User.objects.filter(email=email).exists():
             return Response({"error": f"Email '{email}' is already exist."}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         perms=[]
 
         try:
@@ -87,10 +99,6 @@ class BackEndRegister(APIView):
                     return Response({"error": "You do not have permission to assign permission to any user."}, status=status.HTTP_403_FORBIDDEN)
 
                 try:
-                    # Get the permission by codename
-                    # for perms in permission:
-                    #     perm = Permission.objects.get(codename=perms)
-                    #     user.user_permissions.add(perm)  # Add the permission to the user
                     perms = [Permission.objects.get(codename=perm) for perm in permission]
 
                 except Permission.DoesNotExist as e:
@@ -99,26 +107,34 @@ class BackEndRegister(APIView):
             user = User.objects.create_user(
                 username=username,
                 first_name=firstname,
-                last_name=lastname, 
+                last_name=lastname,
                 email=email, 
                 password=password,
-                is_staff=True if permission else False,
+                is_staff=is_staff,
                 client_id=Generator.generate_hashed_string(username,email)
             )
-            if permission:
+
+            if is_staff:
+                view_permission = Permission.objects.get(codename="view_user")
+                user.user_permissions.add(view_permission)
+
+            if permission and is_staff:
                 user.user_permissions.set(perms)
 
             user.save()
             return Response({
                 "message": "User created successfully!",
                 "user": {
+                    "is_active": user.is_active,
                     "id": user.id,
                     "username": user.username,
                     "email": user.email,
                     "first_name": user.first_name,
                     "last_name": user.last_name,
+                    "verify_email": user.email_verified,
+                    "created_at": user.date_joined,
                 },
-                "status": "Active" if user.is_active else "Inactive",
+                "status": True
             }, status=status.HTTP_201_CREATED)
 
         except Exception as e:
@@ -136,33 +152,40 @@ class Login(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         # Authenticate user
-        user = authenticate(username=username, password=password)
-
-        if user is not None:
-            # If user is authenticated, generate JWT token
-            refresh = RefreshToken.for_user(user)
-            access_token = str(refresh.access_token)
-            
+        try:
+            user = User.objects.get(username=username)
+        except User.DoesNotExist:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+        if user.is_active is False:
+            return Response({"error": "User is deactivated"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not user.check_password(password):
             return Response({
-                'message': 'Login successful',
-                "user": {
-                    "id": user.id,
-                    "username": user.username,
-                    "firstname": user.first_name,
-                    "lastname": user.last_name,
-                    "email": user.email,
-                },
-                'access_token': access_token,
-                'refresh_token': str(refresh),
-                "expires_in": 18000,
-                
-            }, status=status.HTTP_200_OK)
-        else:
-            # If authentication fails, return error response
-            return Response({
-                'message': 'Invalid username or password'
+                'message': 'Wrong password'
             }, status=status.HTTP_401_UNAUTHORIZED)
 
+        # If user is authenticated, generate JWT token
+        refresh = RefreshToken.for_user(user)
+        access_token = str(refresh.access_token)
+        
+        return Response({
+            'message': 'Login successful',
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "firstname": user.first_name,
+                "lastname": user.last_name,
+                "email": user.email,
+                "is_active": user.is_active,
+                "is_staff": user.is_staff,
+            },
+                "status": True,
+                'access_token': access_token,
+                'refresh_token': str(refresh)
+                
+            }, status=status.HTTP_200_OK)
+    
 class Logout(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -183,6 +206,8 @@ class Logout(APIView):
             # Blacklist the refresh token to invalidate it
             token.blacklist()
 
+        except TokenError as e:
+            return Response({"error":f"Token error: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
         except InvalidToken:
             return Response({"error": "Invalid refresh token."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -212,17 +237,27 @@ class BackendUpdateUser(APIView):
             raise NotFound(detail="User not found.")
 
         backend_user = request.user
-        
+
+        if user.is_superuser and not backend_user.is_superuser:
+            return Response({"error": "You can not update superuser."}, status=status.HTTP_400_BAD_REQUEST)
+
         if backend_user.has_perm('app.change_user'):
-            if username:
-                user.username = username
-            if firstname:
-                user.first_name = firstname
-            if lastname:
-                user.last_name = lastname
-            if email:
-                user.email = email
+            if user_id==backend_user.id or not user.is_staff or backend_user.is_superuser:
+                if username:
+                    if User.objects.filter(username=username).exists():
+                        return Response({"error": f"Username '{username}' is already exist."}, status=status.HTTP_400_BAD_REQUEST)
+                    user.username = username
+                if firstname:
+                    user.first_name = firstname
+                if lastname:
+                    user.last_name = lastname
+                if email:
+                    if User.objects.filter(email=email).exists():
+                        return Response({"error": f"Email '{email}' is already exist."}, status=status.HTTP_400_BAD_REQUEST)
+                    user.email = email
                 user.save()
+            else:
+                return Response({"message": "You can't update the admin user"}, status=status.HTTP_400_BAD_REQUEST)
         else:
             return Response({"message": "You don't have permission to update the user"}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"message": "User updated successfully"}, status=status.HTTP_200_OK)
@@ -238,8 +273,6 @@ class GetAllBackendUser(APIView):
 
         for user in users:
             user_data.append({
-                'id': user.id,
-                'is_staff': user.is_staff,
                 'username': user.username,
                 'first_name': user.first_name,
                 'last_name': user.last_name,
@@ -256,8 +289,6 @@ class GetBackendUser(APIView):
         user=request.user
         if user:
             user_data = {
-            'id': user.id,
-                'is_staff': user.is_staff,
                 'username': user.username,
                 'first_name': user.first_name,
                 'last_name': user.last_name,
@@ -443,14 +474,16 @@ class ReadJSONData(APIView):
                         return Response({"error": "Invalid index for features."}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({"error": "Version or category not found."}, status=status.HTTP_404_NOT_FOUND)
-    
+
 class AssignBackendUserPermission(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request):
         admin_user = request.user
+
         user_id = request.data.get('user_id')
         permissions = request.data.get('permission',[])
+
         
         if user_id==admin_user.id:
             return Response({"error": "You can not assign permission to yourself."}, status=status.HTTP_400_BAD_REQUEST)
@@ -463,13 +496,17 @@ class AssignBackendUserPermission(APIView):
         
         try:
             user = User.objects.get(id=user_id)
+            if user.is_superuser:
+                return Response({"error": "You can not assign permission to superuser."}, status=status.HTTP_400_BAD_REQUEST)
+        
         except User.DoesNotExist:
             return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
         
-        if not admin_user.has_perm('auth.change_user'):
+        if not admin_user.has_perm('app.change_user'):
             return Response({"error": "You do not have permission to assign permissions to users."}, status=status.HTTP_403_FORBIDDEN)
 
         permission_objects = []
+
         for perm_codename in permissions:
             try:
                 perm = Permission.objects.get(codename=perm_codename)
@@ -477,7 +514,7 @@ class AssignBackendUserPermission(APIView):
             except Permission.DoesNotExist:
                 return Response({"error": f"Permission '{perm_codename}' does not exist."}, status=status.HTTP_400_BAD_REQUEST)
 
-        user.user_permissions.set(permission_objects)
+        user.user_permissions.add(*permission_objects)
 
         user.save()
 
@@ -490,8 +527,11 @@ class AssignBackendUserPermission(APIView):
         user_id = request.data.get("user_id")
         permissions = request.data.get("permissions", [])
 
+        if not admin_user.has_perm('auth.delete_permission'):
+            return Response({"error": "You do not have permission to delete permissions from users."}, status=status.HTTP_403_FORBIDDEN)
+        
         if user_id==admin_user.id:
-            return Response({"error": "You can not assign permission to yourself."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "You can not delete permission to yourself."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not user_id:
             return Response({"error":"User ID required"},status=status.HTTP_400_BAD_REQUEST)
@@ -503,8 +543,8 @@ class AssignBackendUserPermission(APIView):
         except User.DoesNotExist:
             return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
         
-        if not admin_user.has_perm('app.change_user'):
-            return Response({"error": "You do not have permission to delete permissions from users."}, status=status.HTTP_403_FORBIDDEN)
+        if user.is_superuser:
+            return Response({"error": "You can not delete permission from superuser."}, status=status.HTTP_400_BAD_REQUEST)
 
         permission_objects = []
         for perm_codename in permissions:
@@ -548,9 +588,12 @@ class AssignBackendUserPermission(APIView):
         print(permission_data)
 
         return Response({
-            "message": "Permissions deleted successfully!",
-            "permissions": permission_data
-            }, status=status.HTTP_200_OK)
+            "message": f"Permissions of {user.username}'s",
+            "user": {
+                "username": user.username,
+                "permissions": permission_data
+            }
+        }, status=status.HTTP_200_OK)
 
 class DeleteBackendUser(APIView):
     permission_classes = [IsAdminUser]
@@ -567,14 +610,21 @@ class DeleteBackendUser(APIView):
         if not admin_user.has_perm('app.delete_user'):
             return Response({"error":"You do not have permission to delete user."},status=status.HTTP_400_BAD_REQUEST)
         
+        if user_id==admin_user.id:
+            return Response({"error": "You can not delete yourself."}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             delete_user = User.objects.get(id=user_id)
+
+            if delete_user.is_superuser:
+                return Response({"error": "You can not delete superuser."}, status=status.HTTP_400_BAD_REQUEST)
+
             delete_user.delete()
             return Response({
                 "message": "User deleted successfully.",
                 "user": delete_user.username
                 }, status=status.HTTP_200_OK)
-    
+
         except User.DoesNotExist:
             return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -595,6 +645,10 @@ class DeactivateUser(APIView):
             
         try:
             deactivate_user = User.objects.get(id=user_id)
+
+            if deactivate_user.is_superuser:
+                return Response({"error": "You can not deactivate superuser."}, status=status.HTTP_400_BAD_REQUEST)
+
             deactivate_user.is_active=False
 
             deactivate_user.save()
@@ -603,11 +657,38 @@ class DeactivateUser(APIView):
                 "message": "User deactivated successfully.",
                 "user": deactivate_user.username
                 }, status=status.HTTP_200_OK)
-    
+
         except User.DoesNotExist:
             return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
+class CreatePermission(APIView):
+    permission_classes = [IsAdminUser]
 
+    def post(self, request):
+        admin_user = request.user
+        permission_name = request.data.get('permission_name')
+        permission_codename = request.data.get('permission_codename')
+
+        if not permission_name:
+            return Response({"error": "Permission name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not permission_codename:
+            return Response({"error": "Permission codename is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not admin_user.has_perm('auth.create_permission'):
+            return Response({"error": "You do not have permission to create permission."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            permission = Permission.objects.create(name=permission_name, codename=permission_codename)
+            return Response({
+                "message": "Permission created successfully.",
+                "permission": {
+                    "id": permission.id,
+                    "name": permission.name,
+                    "codename": permission.codename
+                }
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # frontend APIs
 
@@ -620,8 +701,16 @@ class FrontEndRegister(APIView):
         email= request.data.get('email')
         password= request.data.get('password')
 
-        if not all([username, firstname, lastname, email, password]):
-            return Response({"error": "All fields are required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not username:
+            return Response({"error": "Username is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not firstname:
+            return Response({"error": "First name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not lastname:
+            return Response({"error": "Last name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not email:
+            return Response({"error": "Email is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not password:
+            return Response({"error": "Password is required."}, status=status.HTTP_400_BAD_REQUEST)
         
         if User.objects.filter(username=username).exists():
             return Response({"error": f"Username '{username}' is already exist."}, status=status.HTTP_400_BAD_REQUEST)
@@ -640,24 +729,26 @@ class FrontEndRegister(APIView):
             )
             user.save()
             return Response({
-                "message": "Registration successful!",
+                "message": "Registration successful !",
                 "user": {
+                    "is_active": user.is_active,
                     "id": user.id,
                     "username": user.username,
                     "email": user.email,
                     "first_name": user.first_name,
                     "last_name": user.last_name,
+                    "verify_email": user.email_verified,
+                    "created_at": user.date_joined,
                 },
-                "status": "Active" if user.is_active else "Inactive",
+                "status": True
             }, status=status.HTTP_201_CREATED)
 
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
 class FrontendUserLogin(APIView):
     def post(self, request):
-
+        
         username = request.data.get('username')
         password = request.data.get('password')
 
@@ -667,32 +758,39 @@ class FrontendUserLogin(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         # Authenticate user
-        user = authenticate(username=username, password=password)
-
-        if user is not None:
-            # If user is authenticated, generate JWT token
-            refresh = RefreshToken.for_user(user)
-            access_token = str(refresh.access_token)
-            
+        try:
+            user = User.objects.get(username=username)
+        except User.DoesNotExist:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+        if user.is_active is False:
+            return Response({"error": "User is deactivated"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not user.check_password(password):
             return Response({
-                'message': 'Login successful',
-                "user": {
-                    "id": user.id,
-                    "username": user.username,
-                    "firstname": user.first_name,
-                    "lastname": user.last_name,
-                    "email": user.email,
-                },
+                'message': 'Wrong password'
+            }, status=status.HTTP_401_UNAUTHORIZED)
+
+        # If user is authenticated, generate JWT token
+        refresh = RefreshToken.for_user(user)
+        access_token = str(refresh.access_token)
+        
+        return Response({
+            'message': 'Login successful',
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "firstname": user.first_name,
+                "lastname": user.last_name,
+                "email": user.email,
+                "is_active": user.is_active,
+                "is_staff": user.is_staff,
+            },
+                "status": True,
                 'access_token': access_token,
-                'refresh_token': str(refresh),
-                "expires_in": 18000,
+                'refresh_token': str(refresh)
                 
             }, status=status.HTTP_200_OK)
-        else:
-            # If authentication fails, return error response
-            return Response({
-                'message': 'Invalid username or password'
-            }, status=status.HTTP_401_UNAUTHORIZED)
 
 class FrontendUserLogout(APIView):
     permission_classes = [IsAuthenticated]
@@ -713,7 +811,9 @@ class FrontendUserLogout(APIView):
             token = RefreshToken(refresh_token)
             # Blacklist the refresh token to invalidate it
             token.blacklist()
-
+            
+        except TokenError as e:
+            return Response({"error":f"Token error: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
         except InvalidToken:
             return Response({"error": "Invalid refresh token."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -722,8 +822,78 @@ class FrontendUserLogout(APIView):
         
         return Response({"message": "Logged out successfully."}, status=status.HTTP_200_OK)
 
+class FrontendPorfile(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        current_user = request.user
+        user_data = {
+            'username': current_user.username,
+            'first_name': current_user.first_name,
+            'last_name': current_user.last_name,
+            'email': current_user.email,
+            'joined_date': current_user.date_joined,
+            'client_id':current_user.client_id,
+        }
+        return Response({"user": user_data}, status=status.HTTP_200_OK)
 
+class FrontendUpdatePorfile(APIView):
+    permission_classes = [IsAuthenticated]
 
+    def post(self, request):
+        current_user = request.user
+
+        username = request.data.get('username')
+        firstname = request.data.get('firstname')
+        lastname = request.data.get('lastname')
+        email = request.data.get('email')
+
+        try:
+            # Fetch the user object by ID
+            user = User.objects.get(username=current_user.username)
+        except User.DoesNotExist:
+            raise NotFound(detail="User not found.")
+        
+        if username:
+            user.username = username
+        if firstname:
+            user.first_name = firstname
+        if lastname:
+            user.last_name = lastname
+        if email:
+            user.email = email
+        user.save()
+
+        return Response({"message": "User updated successfully"}, status=status.HTTP_200_OK)
+
+class CreateFrontendUserPasssword(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self,request):
+        current_user = request.user
+        password = request.data.get('password')
+        new_password = request.data.get('new_password')
+        confirm_password = request.data.get('confirm_password')
+
+        if not password:
+            return Response({"error": "Current password is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not new_password:
+            return Response({"error": "New password is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not confirm_password:
+            return Response({"error": "Confirmed password is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        user = User.objects.get(username=current_user.username)
+
+        if not user.check_password(password):
+            return Response({"error": "Current password is incorrect."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if new_password != confirm_password:
+            return Response({"error": "New password and confirm password does not match."}, status=status.HTTP_400_BAD_REQUEST)
+
+        current_user.set_password(new_password)
+        current_user.save()
+
+        return Response({"message": "Password updated successfully."}, status=status.HTTP_200_OK)
+    
 
 
 

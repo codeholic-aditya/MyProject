@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import FrontEndRegister,BackEndRegister,Login,Logout,BackendUpdateUser,ReadJSONData, GetAllBackendUser, GetBackendUser, AssignBackendUserPermission, DeleteBackendUser, DeactivateUser, FrontendUserLogin, FrontendUserLogout
+from .views import FrontEndRegister,BackEndRegister,Login,Logout,BackendUpdateUser,ReadJSONData, GetAllBackendUser, GetBackendUser,AssignBackendUserPermission, DeleteBackendUser, DeactivateUser, FrontendUserLogin, FrontendUserLogout, FrontendUpdatePorfile, FrontendPorfile, CreateFrontendUserPasssword
 # from rest_framework_simplejwt.views import TokenRefreshView
 
 urlpatterns = [
@@ -18,6 +18,9 @@ urlpatterns = [
     path('frontend-user/register/', FrontEndRegister.as_view(), name='frontend-register'),
     path('frontend-user/login/', FrontendUserLogin.as_view(), name='login'),
     path('frontend-user/logout/',FrontendUserLogout.as_view(),name='logout'),
+    path('frontend-user/profile/', FrontendPorfile.as_view(), name='profile'),
+    path('frontend-user/profile-update/',FrontendUpdatePorfile.as_view(),name='profile-update'),
+    path('frontend-user/create-password/',CreateFrontendUserPasssword.as_view(),name='create-password'),
     
 ]
 
